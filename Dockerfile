@@ -1,47 +1,58 @@
-# 1️⃣ Utilisation de l'image officielle PHP avec les extensions nécessaires
-FROM php:8.2-fpm
+# Étape 1 : Image de base PHP avec les extensions nécessaires
+FROM php:8.2-apache
 
-# 2️⃣ Installation des dépendances du système
+# Étape 2 : Installation des dépendances système
 RUN apt-get update && apt-get install -y \
+    git \
     unzip \
     curl \
-    git \
     libpng-dev \
     libjpeg-dev \
     libfreetype6-dev \
     libzip-dev \
-    zip \
-    && docker-php-ext-configure gd --with-freetype --with-jpeg \
-    && docker-php-ext-install gd pdo pdo_mysql zip
+    libonig-dev \
+    default-mysql-client \
+    libpq-dev \
+    && docker-php-ext-install pdo pdo_mysql pdo_pgsql gd zip bcmath
 
-# 3️⃣ Installation de Composer
-COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
+# Étape 3 : Activation des modules Apache nécessaires
+RUN a2enmod rewrite
 
-# 4️⃣ Définition du répertoire de travail
+# Étape 4 : Installation de Composer
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+
+# Étape 5 : Configuration du répertoire de travail
 WORKDIR /var/www
 
-# 5️⃣ Copie des fichiers de l'application
+# Étape 6 : Copie des fichiers Laravel
 COPY . .
 
-# 6️⃣ Installation des dépendances PHP
+# Étape 7 : Installation des dépendances PHP avec Composer
 RUN composer install --no-dev --optimize-autoloader
 
-# 7️⃣ Permissions pour Laravel
-RUN chmod -R 775 storage bootstrap/cache
+# Étape 8 : Droits sur le stockage et le cache
+RUN chown -R www-data:www-data /var/www/storage /var/www/bootstrap/cache \
+    && chmod -R 775 /var/www/storage /var/www/bootstrap/cache
 
-# 8️⃣ Copie du fichier d'environnement et génération de la clé
-RUN cp .env.example .env && php artisan key:generate
+# Étape 9 : Configuration du Document Root pour Laravel
+ENV APACHE_DOCUMENT_ROOT /var/www/public
+RUN sed -ri -e 's!/var/www/html!${APACHE_DOCUMENT_ROOT}!g' /etc/apache2/sites-available/*.conf \
+    && sed -ri -e 's!/var/www/!${APACHE_DOCUMENT_ROOT}!g' /etc/apache2/apache2.conf /etc/apache2/conf-available/*.conf
 
-# 9️⃣ Configuration de Nginx
-RUN apt-get install -y nginx
-COPY docker/nginx/default.conf /etc/nginx/sites-available/default
+RUN if [ ! -f /var/www/.env ]; then \
+        cp /var/www/.env.example /var/www/.env || touch /var/www/.env; \
+    fi
 
-# 🔟 Supervisor pour gérer les processus (queue workers, schedule, etc.)
-RUN apt-get install -y supervisor
-COPY docker/supervisor/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+# Étape 11 : Configuration des permissions pour www-data
+RUN chown -R www-data:www-data /var/www \
+    && chmod -R 755 /var/www
 
-# 1️⃣1️⃣ Exposition des ports
+# Étape 12 : Activer les logs d'erreurs pour le débogage
+RUN echo "display_errors = On" >> /usr/local/etc/php/conf.d/custom.ini \
+    && echo "display_startup_errors = On" >> /usr/local/etc/php/conf.d/custom.ini \
+    && echo "error_reporting = E_ALL" >> /usr/local/etc/php/conf.d/custom.ini
+
+# Étape 13 : Commande de démarrage
+CMD ["apache2-foreground"]
+
 EXPOSE 80
-
-# 1️⃣2️⃣ Commande de démarrage
-CMD ["sh", "-c", "php artisan migrate --force && supervisord -n"]
